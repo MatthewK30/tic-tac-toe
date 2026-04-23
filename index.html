@@ -63,13 +63,36 @@ transition: transform 0.15s, box-shadow 0.15s;
 }
 #restart-btn:hover {
 transform: scale(1.05);
-box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
-}
-</style>
+      box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
+    }
+    #timer-container {
+      width: 420px;
+      height: 8px;
+      background: #1a1a2e;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+      overflow: hidden;
+    }
+    #timer-bar {
+      height: 100%;
+      width: 100%;
+      border-radius: 4px;
+      background: hsl(120, 100%, 50%);
+      transition: background-color 0.1s;
+    }
+    .winner-text {
+      animation: winPulse 0.6s ease-in-out infinite alternate;
+    }
+    @keyframes winPulse {
+      from { text-shadow: 0 0 5px currentColor; transform: scale(1); }
+      to   { text-shadow: 0 0 20px currentColor, 0 0 40px currentColor; transform: scale(1.08); }
+    }
+    </style>
 </head>
 <body>
 <h1>Tic-Tac-Toe</h1>
 <div id="status">X's turn</div>
+<div id="timer-container"><div id="timer-bar"></div></div>
 <div id="game-container">
 <canvas id="bg-canvas"></canvas>
 <canvas id="game-canvas"></canvas>
@@ -93,6 +116,9 @@ let winLine = null;
 let moveTime = Array(9).fill(0);
 let now = 0;
 let hoverCell = -1;
+const TURN_TIME = 5;
+let turnStart = 0;
+let lastFrame = 0;
 
 function cellCenter(i) {
 return { x: (i % 3) * CELL + CELL / 2, y: Math.floor(i / 3) * CELL + CELL / 2 };
@@ -126,13 +152,18 @@ if (result) {
 gameOver = true;
 winner = result.player;
 winLine = result.line;
-statusEl.textContent = winner + ' wins!';
-} else if (board.every(c => c)) {
-gameOver = true;
-statusEl.textContent = "It's a draw!";
-} else {
-currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
-statusEl.textContent = currentPlayer + "'s turn";
+    statusEl.textContent = winner + ' wins!';
+    statusEl.classList.add('winner-text');
+    statusEl.style.color = winner === 'X' ? '#00d9ff' : '#7b2fff';
+  } else if (board.every(c => c)) {
+    gameOver = true;
+    statusEl.textContent = "It's a draw!";
+    statusEl.classList.add('winner-text');
+    statusEl.style.color = '#ffd966';
+  } else {
+    currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+    statusEl.textContent = currentPlayer + "'s turn";
+    turnStart = now;
 }
 }
 
@@ -159,9 +190,15 @@ winner = null;
 winLine = null;
 moveTime = Array(9).fill(0);
 statusEl.textContent = "X's turn";
+statusEl.classList.remove('winner-text');
+statusEl.style.color = '';
+timerBar.style.width = '100%';
+timerBar.style.backgroundColor = 'hsl(120, 100%, 50%)';
+turnStart = now;
 }
 
 const statusEl = document.getElementById('status');
+const timerBar = document.getElementById('timer-bar');
 const restartBtn = document.getElementById('restart-btn');
 restartBtn.addEventListener('click', restart);
 
@@ -418,7 +455,26 @@ let startTime = performance.now() / 1000;
 
 function render() {
 now = performance.now() / 1000 - startTime;
+const dt = lastFrame === 0 ? 0 : Math.min(now - lastFrame, 0.1);
+lastFrame = now;
 const t = now;
+
+// Timer
+if (turnStart === 0) turnStart = now;
+if (!gameOver) {
+  const elapsed = now - turnStart;
+  const fraction = Math.max(0, 1 - elapsed / TURN_TIME);
+  timerBar.style.width = fraction * 100 + '%';
+  timerBar.style.backgroundColor = 'hsl(' + (fraction * 120) + ', 100%, 50%)';
+  if (elapsed >= TURN_TIME) {
+    currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+    statusEl.textContent = currentPlayer + "'s turn";
+    turnStart = now;
+  }
+} else {
+  timerBar.style.width = '100%';
+  timerBar.style.backgroundColor = '#333';
+}
 
 // BG
 bgGl.viewport(0, 0, bgCanvas.width, bgCanvas.height);
