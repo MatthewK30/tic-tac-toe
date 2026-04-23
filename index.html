@@ -119,6 +119,7 @@ let hoverCell = -1;
 const TURN_TIME = 5;
 let turnStart = 0;
 let lastFrame = 0;
+let particles = [];
 
 function cellCenter(i) {
 return { x: (i % 3) * CELL + CELL / 2, y: Math.floor(i / 3) * CELL + CELL / 2 };
@@ -155,11 +156,15 @@ winLine = result.line;
     statusEl.textContent = winner + ' wins!';
     statusEl.classList.add('winner-text');
     statusEl.style.color = winner === 'X' ? '#00d9ff' : '#7b2fff';
+    const [wa, wb, wc] = winLine;
+    const wca = cellCenter(wa), wcb = cellCenter(wb), wcc = cellCenter(wc);
+    spawnParticles((wca.x+wcb.x+wcc.x)/3, (wca.y+wcb.y+wcc.y)/3, winner === 'X' ? X_COLORS : O_COLORS);
   } else if (board.every(c => c)) {
     gameOver = true;
     statusEl.textContent = "It's a draw!";
     statusEl.classList.add('winner-text');
     statusEl.style.color = '#ffd966';
+    spawnParticles(SIZE/2, SIZE/2, DRAW_COLORS);
   } else {
     currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
     statusEl.textContent = currentPlayer + "'s turn";
@@ -182,6 +187,29 @@ hoverCell = -1;
 }
 }
 
+function spawnParticles(ox, oy, colorSets) {
+for (let i = 0; i < 100; i++) {
+const angle = Math.random() * Math.PI * 2;
+const speed = 30 + Math.random() * 120;
+const color = colorSets[Math.floor(Math.random() * colorSets.length)];
+particles.push({
+x: ox,
+y: oy,
+vx: Math.cos(angle) * speed,
+vy: Math.sin(angle) * speed,
+color: color,
+life: 1.0,
+size: 3 + Math.random() * 5,
+rotation: Math.random() * Math.PI * 2,
+rotSpeed: (Math.random() - 0.5) * 10
+});
+}
+}
+
+const X_COLORS = [[0,0.85,1.0],[0,0.6,1.0],[0.2,1.0,1.0]];
+const O_COLORS = [[0.45,0.15,1.0],[0.6,0.3,1.0],[0.3,0.1,0.8]];
+const DRAW_COLORS = [[1.0,0.85,0.3],[1.0,0.7,0.2],[1.0,1.0,0.6]];
+
 function restart() {
 board = Array(9).fill(null);
 currentPlayer = 'X';
@@ -189,6 +217,7 @@ gameOver = false;
 winner = null;
 winLine = null;
 moveTime = Array(9).fill(0);
+particles = [];
 statusEl.textContent = "X's turn";
 statusEl.classList.remove('winner-text');
 statusEl.style.color = '';
@@ -355,6 +384,37 @@ gl_FragColor = vec4(0.3, 0.6, 1.0, u_alpha * 0.2);
 }
 `;
 
+const particleVS = `
+attribute vec2 a_pos;
+attribute float a_size;
+attribute float a_life;
+attribute vec3 a_particleColor;
+uniform vec2 u_res;
+uniform float u_dpr;
+varying float v_life;
+varying vec3 v_color;
+void main() {
+vec2 clip = vec2((a_pos.x / u_res.x) * 2.0 - 1.0, 1.0 - (a_pos.y / u_res.y) * 2.0);
+gl_Position = vec4(clip, 0.0, 1.0);
+gl_PointSize = a_size * a_life * u_dpr;
+v_life = a_life;
+v_color = a_particleColor;
+}
+`;
+
+const particleFS = `
+precision mediump float;
+varying float v_life;
+varying vec3 v_color;
+void main() {
+vec2 coord = gl_PointCoord - vec2(0.5);
+float dist = length(coord);
+if (dist > 0.5) discard;
+float alpha = smoothstep(0.5, 0.2, dist) * v_life;
+gl_FragColor = vec4(v_color, alpha);
+}
+`;
+
 function makeProgram(gl, vsSrc, fsSrc) {
 return createProgram(gl,
 createShader(gl, gl.VERTEX_SHADER, vsSrc),
@@ -366,6 +426,7 @@ const xProg = makeProgram(gl, gameVS, xFS);
 const oProg = makeProgram(gl, gameVS, oFS);
 const lineProg = makeProgram(gl, gameVS, lineFS);
 const hoverProg = makeProgram(gl, gameVS, hoverFS);
+const particleProg = makeProgram(gl, particleVS, particleFS);
 
 function getUniforms(gl, prog, names) {
 const u = {};
@@ -377,6 +438,16 @@ const xU = getUniforms(gl, xProg, ['u_offset','u_scale','u_rot','u_glow','u_time
 const oU = getUniforms(gl, oProg, ['u_offset','u_scale','u_rot','u_glow','u_time']);
 const lineU = getUniforms(gl, lineProg, ['u_offset','u_scale','u_rot','u_progress','u_time']);
 const hoverU = getUniforms(gl, hoverProg, ['u_offset','u_scale','u_rot','u_alpha']);
+
+const pU = getUniforms(gl, particleProg, ['u_res','u_dpr']);
+const pAttrPos = gl.getAttribLocation(particleProg, 'a_pos');
+const pAttrSize = gl.getAttribLocation(particleProg, 'a_size');
+const pAttrLife = gl.getAttribLocation(particleProg, 'a_life');
+const pAttrColor = gl.getAttribLocation(particleProg, 'a_particleColor');
+const pBufPos = gl.createBuffer();
+const pBufSize = gl.createBuffer();
+const pBufLife = gl.createBuffer();
+const pBufColor = gl.createBuffer();
 
 // X shape: two crossing lines made of thin quads
 function buildXGeometry() {
@@ -528,7 +599,63 @@ const mx = (ca.x + cb.x) / 2;
 const my = (ca.y + cb.y) / 2;
 const prog = Math.min(t * 2, 1);
 drawShape(lineProg, lineU, quadBuf, 4, mx, my, len, angle,
-{ u_progress: prog, u_time: t });
+    { u_progress: prog, u_time: t });
+}
+
+// Particles
+if (particles.length > 0) {
+  particles.forEach(p => {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 200 * dt;
+    p.life -= dt * 0.4;
+    p.rotation += p.rotSpeed * dt;
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  const n = particles.length;
+  if (n > 0) {
+    const posArr = new Float32Array(n * 2);
+    const sizeArr = new Float32Array(n);
+    const lifeArr = new Float32Array(n);
+    const colArr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const p = particles[i];
+      posArr[i*2] = p.x;
+      posArr[i*2+1] = p.y;
+      sizeArr[i] = p.size;
+      lifeArr[i] = p.life;
+      colArr[i*3] = p.color[0];
+      colArr[i*3+1] = p.color[1];
+      colArr[i*3+2] = p.color[2];
+    }
+
+    gl.useProgram(particleProg);
+    gl.uniform2f(pU.u_res, SIZE, SIZE);
+    gl.uniform1f(pU.u_dpr, devicePixelRatio);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, pBufPos);
+    gl.bufferData(gl.ARRAY_BUFFER, posArr, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(pAttrPos);
+    gl.vertexAttribPointer(pAttrPos, 2, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, pBufSize);
+    gl.bufferData(gl.ARRAY_BUFFER, sizeArr, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(pAttrSize);
+    gl.vertexAttribPointer(pAttrSize, 1, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, pBufLife);
+    gl.bufferData(gl.ARRAY_BUFFER, lifeArr, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(pAttrLife);
+    gl.vertexAttribPointer(pAttrLife, 1, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, pBufColor);
+    gl.bufferData(gl.ARRAY_BUFFER, colArr, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(pAttrColor);
+    gl.vertexAttribPointer(pAttrColor, 3, gl.FLOAT, false, 0, 0);
+
+    gl.drawArrays(gl.POINTS, 0, n);
+  }
 }
 
 requestAnimationFrame(render);
